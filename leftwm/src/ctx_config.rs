@@ -72,9 +72,6 @@ impl<'de> Deserialize<'de> for WsMode {
 /// skipped entirely), emit `"<name>-<slot>"` for slots 1..=3, using that
 /// slot's `wm_workspaces[i].name` override if present, else the default
 /// `["web", "llm", "emacs"]` name for that position.
-// Not yet called outside tests — wiring into the config-loading path is
-// Task 4. Remove this allow once that lands.
-#[allow(dead_code)]
 pub fn derive_tags(ctx_yaml_path: &Path) -> Result<Vec<String>, String> {
     let contents = std::fs::read_to_string(ctx_yaml_path)
         .map_err(|e| format!("reading {}: {e}", ctx_yaml_path.display()))?;

@@ -288,6 +288,26 @@ pub fn load() -> Config {
         .unwrap_or_default()
 }
 
+/// Hardcoded intentionally, matching the existing hardcoded path in
+/// ~/config/wm/xmonad/Workspaces.hs (`loadedCtxTopics`) and the Rust
+/// `expanse` process's own config reader — this fork is personal, not
+/// meant to be portable to another machine's directory layout.
+const CTX_CONFIG_PATH: &str = "/home/enielson/config/ctx/config.yaml";
+
+/// Overwrites `config.tags` with tags derived from ctx/config.yaml,
+/// degrading to whatever `config.ron` already had on any read/parse
+/// error or empty result — same degrade-on-error contract as
+/// `XMonad.Config.Workspaces.loadedCtxTopics`.
+fn apply_ctx_tags(config: &mut Config) {
+    match crate::ctx_config::derive_tags(Path::new(CTX_CONFIG_PATH)) {
+        Ok(tags) if !tags.is_empty() => config.tags = Some(tags),
+        Ok(_) => tracing::warn!("ctx/config.yaml produced no tags, keeping config.ron's tags"),
+        Err(e) => tracing::warn!(
+            "failed to derive tags from ctx/config.yaml, keeping config.ron's tags: {e}"
+        ),
+    }
+}
+
 /// # Panics
 ///
 /// Function can only panic if config.ron file cannot be serialized. This should not occur as it is defined
@@ -311,7 +331,8 @@ fn load_from_file() -> Result<Config> {
         let ron = Options::default()
             .with_default_extension(Extensions::IMPLICIT_SOME | Extensions::UNWRAP_NEWTYPES);
         let contents = fs::read_to_string(config_file_ron)?;
-        let config: Config = ron.from_str(&contents)?;
+        let mut config: Config = ron.from_str(&contents)?;
+        apply_ctx_tags(&mut config);
         Ok(config)
     } else {
         tracing::debug!("Config file `config.ron` not found. Using default config.");
