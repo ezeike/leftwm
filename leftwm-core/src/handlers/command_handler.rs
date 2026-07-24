@@ -119,6 +119,8 @@ fn process_internal<H: Handle, C: Config, SERVER: DisplayServer<H>>(
         Command::FocusWindowAt(param) => focus_window_direction(state, *param),
         Command::FocusWorkspaceNext => focus_workspace_change(state, 1),
         Command::FocusWorkspacePrevious => focus_workspace_change(state, -1),
+        // TODO(Task 2): implement FocusWorkspace(index) handler behavior.
+        Command::FocusWorkspace(_) => None,
 
         Command::SoftReload => {
             // Make sure the currently focused window is saved for the tag.

@@ -64,6 +64,7 @@ pub enum Command<H: Handle> {
     FocusWindowAt(FocusDirection),
     FocusWorkspaceNext,
     FocusWorkspacePrevious,
+    FocusWorkspace(usize),
     SendWindowToTag {
         #[serde(bound = "")]
         window: Option<WindowHandle<H>>,

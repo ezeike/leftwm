@@ -149,6 +149,7 @@ fn parse_command<H: Handle>(s: &str) -> Result<Command<H>, Box<dyn std::error::E
         "FocusPreviousTag" => build_focus_previous_tag(rest),
         "FocusWorkspaceNext" => Ok(Command::FocusWorkspaceNext),
         "FocusWorkspacePrevious" => Ok(Command::FocusWorkspacePrevious),
+        "FocusWorkspace" => build_focus_workspace(rest),
         "FocusWindow" => build_focus_window(rest),
         // Layout
         "DecreaseMainWidth" | "DecreaseMainSize" => build_decrease_main_size(rest), // 'DecreaseMainWidth' deprecated
@@ -466,6 +467,17 @@ fn build_focus_window<H: Handle>(raw: &str) -> Result<Command<H>, Box<dyn std::e
     Ok(Command::FocusWindow(String::from(raw)))
 }
 
+fn build_focus_workspace<H: Handle>(raw: &str) -> Result<Command<H>, Box<dyn std::error::Error>> {
+    if raw.is_empty() {
+        return Err("missing argument workspace index".into());
+    }
+    let index: usize = match raw.parse() {
+        Ok(i) => i,
+        Err(_) => Err("argument workspace index was not a valid workspace number")?,
+    };
+    Ok(Command::FocusWorkspace(index))
+}
+
 fn without_head<'a>(s: &'a str, head: &'a str) -> &'a str {
     if !s.starts_with(head) {
         return s;
@@ -596,6 +608,24 @@ mod test {
     #[test]
     fn build_send_workspace_to_tag_without_parameter() {
         assert!(build_send_workspace_to_tag::<MockHandle>("").is_err());
+    }
+
+    #[test]
+    fn build_focus_workspace_without_parameter() {
+        assert!(build_focus_workspace::<MockHandle>("").is_err());
+    }
+
+    #[test]
+    fn build_focus_workspace_with_valid_index() {
+        assert_eq!(
+            build_focus_workspace::<MockHandle>("1").unwrap(),
+            Command::FocusWorkspace(1)
+        );
+    }
+
+    #[test]
+    fn build_focus_workspace_with_non_numeric_argument() {
+        assert!(build_focus_workspace::<MockHandle>("not-a-number").is_err());
     }
 
     #[test]
