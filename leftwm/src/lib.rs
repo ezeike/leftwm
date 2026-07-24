@@ -2,6 +2,7 @@ pub mod utils;
 
 mod command;
 mod config;
+mod ctx_config;
 mod theme_config;
 
 pub use command::*;
