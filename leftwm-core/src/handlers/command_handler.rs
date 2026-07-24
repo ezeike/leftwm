@@ -119,8 +119,7 @@ fn process_internal<H: Handle, C: Config, SERVER: DisplayServer<H>>(
         Command::FocusWindowAt(param) => focus_window_direction(state, *param),
         Command::FocusWorkspaceNext => focus_workspace_change(state, 1),
         Command::FocusWorkspacePrevious => focus_workspace_change(state, -1),
-        // TODO(Task 2): implement FocusWorkspace(index) handler behavior.
-        Command::FocusWorkspace(_) => None,
+        Command::FocusWorkspace(index) => focus_workspace_by_index(state, *index),
 
         Command::SoftReload => {
             // Make sure the currently focused window is saved for the tag.
@@ -893,6 +892,22 @@ fn focus_workspace_change<H: Handle>(state: &mut State<H>, val: i32) -> Option<b
     None
 }
 
+/// Focuses the workspace at `index` (0-based, matching `state.workspaces`'
+/// existing indexing convention used by `SendWorkspaceToTag`), without
+/// changing which tag that workspace is currently showing. This is the
+/// xmonad `screenWorkspace n >>= windows . W.view` equivalent — a pure
+/// focus move, distinct from `SendWorkspaceToTag` which also reassigns the
+/// target workspace's tag.
+fn focus_workspace_by_index<H: Handle>(state: &mut State<H>, index: usize) -> Option<bool> {
+    let workspace = state.workspaces.get(index)?.clone();
+    // Intentionally skip the sloppy-focus mouse-follow DisplayAction that
+    // focus_workspace_change performs: this is a direct, explicit focus jump
+    // (by index) rather than a relative "next/previous" navigation, so
+    // dragging the mouse along isn't warranted here.
+    state.focus_workspace(&workspace);
+    None
+}
+
 fn rotate_tag<H: Handle>(state: &mut State<H>) -> Option<bool> {
     let workspace = state.focus_manager.workspace_mut(&mut state.workspaces)?;
     let workspace_id = workspace.id;
@@ -1089,6 +1104,65 @@ mod tests {
             DisplayAction::SetWindowOrder(order) => assert_eq!(order, &expected_order),
             _ => unreachable!("No other update should be left"),
         }
+    }
+
+    #[test]
+    fn focus_workspace_by_index_focuses_target_screen_without_changing_its_tag() {
+        let mut manager = Manager::new_test(vec!["1".to_string(), "2".to_string()]);
+        manager.screen_create_handler(Screen::default());
+        manager.screen_create_handler(Screen::default());
+
+        let target_id = manager.state.workspaces[1].id;
+        let target_tag_before = manager.state.workspaces[1].tag;
+
+        // screen_create_handler leaves the most-recently-created workspace
+        // (index 1) focused, which would make this test pass trivially even
+        // against a no-op stub. Force focus onto workspace 0 first so the
+        // precondition differs from the expected postcondition.
+        let other_workspace = manager.state.workspaces[0].clone();
+        manager.state.focus_workspace(&other_workspace);
+        assert_eq!(
+            manager
+                .state
+                .focus_manager
+                .workspace(&manager.state.workspaces)
+                .expect("a workspace should be focused")
+                .id,
+            manager.state.workspaces[0].id
+        );
+
+        assert!(!manager.command_handler(&Command::FocusWorkspace(1)));
+
+        let focused = manager
+            .state
+            .focus_manager
+            .workspace(&manager.state.workspaces)
+            .expect("a workspace should be focused");
+        assert_eq!(focused.id, target_id);
+        assert_eq!(focused.tag, target_tag_before);
+    }
+
+    #[test]
+    fn focus_workspace_out_of_bounds_index_is_a_noop() {
+        let mut manager = Manager::new_test(vec!["1".to_string()]);
+        manager.screen_create_handler(Screen::default());
+
+        let before_id = manager
+            .state
+            .focus_manager
+            .workspace(&manager.state.workspaces)
+            .expect("a workspace should be focused")
+            .id;
+
+        assert!(!manager.command_handler(&Command::FocusWorkspace(99)));
+
+        let after_id = manager
+            .state
+            .focus_manager
+            .workspace(&manager.state.workspaces)
+            .expect("a workspace should still be focused")
+            .id;
+        assert_eq!(before_id, after_id);
     }
 
     #[test]
