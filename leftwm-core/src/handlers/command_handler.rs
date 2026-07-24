@@ -14,6 +14,7 @@ use crate::display_servers::DisplayServer;
 use crate::layouts::{self, MAIN_AND_DECK, MONOCLE};
 use crate::models::{Handle, TagId, WindowState};
 use crate::state::State;
+use crate::utils::child_process::exec_shell_with_args;
 use crate::utils::helpers;
 use crate::utils::helpers::relative_find;
 use crate::{config::Config, models::FocusBehaviour};
@@ -88,7 +89,7 @@ fn process_internal<H: Handle, C: Config, SERVER: DisplayServer<H>>(
         }
         Command::SwapWindowTop { swap } => move_focus_common_vars!(swap_window_top(state, *swap)),
 
-        Command::GoToTag { tag, swap } => goto_tag(state, *tag, *swap),
+        Command::GoToTag { tag, swap } => goto_tag_with_hook(manager, *tag, *swap),
         Command::ReturnToLastTag => return_to_last_tag(state),
 
         Command::CloseWindow => close_window(state),
@@ -359,6 +360,39 @@ fn goto_tag<H: Handle>(
         input_tag
     };
     state.goto_tag_handler(destination_tag)
+}
+
+/// Runs `goto_tag`, then fires the `leftwm-ctx-apps` spawn-on-visit hook for
+/// the tag being switched to, mirroring xmonad's `launchApps` running on
+/// every topic-switch (~/config/wm/xmonad/Workspaces.hs). Takes `manager`
+/// (not `state`) because it needs `manager.children` to track the spawned
+/// process and `manager.state.tags` to resolve the tag's label — both are
+/// only reachable through `Manager`, not through the `state` binding the
+/// surrounding `process_internal` match uses for most other arms.
+fn goto_tag_with_hook<H: Handle, C: Config, SERVER: DisplayServer<H>>(
+    manager: &mut Manager<H, C, SERVER>,
+    tag: TagId,
+    swap: bool,
+) -> Option<bool> {
+    let result = goto_tag(&mut manager.state, tag, swap);
+    // `goto_tag` can land on a different tag than `tag` when `swap` toggles
+    // back to the previously-focused tag, so resolve the label from what's
+    // actually focused afterward rather than the raw `tag` argument.
+    let destination_tag = manager.state.focus_manager.tag(0).unwrap_or_default();
+    // `Tags::get` computes `id - 1` (tag ids are 1-based) without a checked
+    // subtraction, so a `destination_tag` of 0 would panic on underflow
+    // before ever reaching the "no such tag" case. Guard it here rather than
+    // in `Tags::get` itself, which is out of scope for this hook.
+    if destination_tag > 0
+        && let Some(label) = manager
+            .state
+            .tags
+            .get(destination_tag)
+            .map(|t| t.label.clone())
+    {
+        exec_shell_with_args("leftwm-ctx-apps", vec![label], &mut manager.children);
+    }
+    result
 }
 
 fn return_to_last_tag<H: Handle>(state: &mut State<H>) -> Option<bool> {
@@ -1195,6 +1229,64 @@ mod tests {
         manager.command_handler(&Command::ReturnToLastTag);
         let current_tag = manager.state.focus_manager.tag(0).unwrap_or_default();
         assert_eq!(current_tag, 1);
+    }
+
+    #[test]
+    fn goto_tag_with_hook_still_focuses_the_target_tag() {
+        let mut manager = Manager::new_test(vec!["1".to_string(), "2".to_string()]);
+        manager.screen_create_handler(Screen::default());
+
+        assert!(manager.command_handler(&Command::GoToTag { tag: 2, swap: false }));
+
+        let focused_tag = manager
+            .state
+            .focus_manager
+            .tag(0)
+            .expect("a tag should be focused");
+        assert_eq!(focused_tag, 2);
+    }
+
+    #[test]
+    fn goto_tag_with_hook_does_not_panic_for_an_out_of_range_tag() {
+        let mut manager = Manager::new_test(vec!["1".to_string()]);
+        manager.screen_create_handler(Screen::default());
+
+        // Should behave exactly like plain `goto_tag` for an invalid id: no panic,
+        // hook lookup finds no matching `Tag` and silently skips spawning.
+        let _ = manager.command_handler(&Command::GoToTag { tag: 99, swap: false });
+    }
+
+    #[test]
+    fn goto_tag_with_hook_does_not_panic_for_tag_zero() {
+        let mut manager = Manager::new_test(vec!["1".to_string()]);
+        manager.screen_create_handler(Screen::default());
+
+        // `tag: 0` is the case that actually exercises the underflow guard:
+        // `Tags::get` computes `id - 1`, so id `99` (out-of-bounds index)
+        // doesn't panic, but id `0` would without the guard.
+        let _ = manager.command_handler(&Command::GoToTag { tag: 0, swap: false });
+    }
+
+    #[test]
+    fn goto_tag_with_hook_swap_toggle_back_focuses_the_previous_tag() {
+        let mut manager = Manager::new_test(vec!["1".to_string(), "2".to_string()]);
+        manager.screen_create_handler(Screen::default());
+
+        // Start on tag 1 (default focus after screen creation).
+        let focused_tag = manager.state.focus_manager.tag(0).unwrap_or_default();
+        assert_eq!(focused_tag, 1);
+
+        assert!(manager.command_handler(&Command::GoToTag { tag: 2, swap: false }));
+        let focused_tag = manager.state.focus_manager.tag(0).unwrap_or_default();
+        assert_eq!(focused_tag, 2);
+
+        // Requesting tag 2 again with `swap: true` while already on tag 2
+        // toggles back to the previously-focused tag (1), not tag 2. The
+        // hook must resolve/spawn for the tag actually landed on (1), not
+        // the raw `tag` argument (2) passed to the command.
+        assert!(manager.command_handler(&Command::GoToTag { tag: 2, swap: true }));
+        let focused_tag = manager.state.focus_manager.tag(0).unwrap_or_default();
+        assert_eq!(focused_tag, 1);
     }
 
     #[test]
