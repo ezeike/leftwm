@@ -24,6 +24,8 @@ struct CtxWorkspace {
 struct CtxSlot {
     #[serde(default)]
     name: Option<String>,
+    #[serde(default)]
+    apps: Vec<String>,
 }
 
 #[derive(Debug, PartialEq, Eq, Default)]
@@ -73,10 +75,7 @@ impl<'de> Deserialize<'de> for WsMode {
 /// slot's `wm_workspaces[i].name` override if present, else the default
 /// `["web", "llm", "emacs"]` name for that position.
 pub fn derive_tags(ctx_yaml_path: &Path) -> Result<Vec<String>, String> {
-    let contents = std::fs::read_to_string(ctx_yaml_path)
-        .map_err(|e| format!("reading {}: {e}", ctx_yaml_path.display()))?;
-    let file: CtxFile = serde_yaml::from_str(&contents)
-        .map_err(|e| format!("parsing {}: {e}", ctx_yaml_path.display()))?;
+    let file = load_ctx_file(ctx_yaml_path)?;
 
     let mut tags = Vec::new();
     for ws in &file.workspaces {
@@ -93,6 +92,40 @@ pub fn derive_tags(ctx_yaml_path: &Path) -> Result<Vec<String>, String> {
         }
     }
     Ok(tags)
+}
+
+fn load_ctx_file(ctx_yaml_path: &Path) -> Result<CtxFile, String> {
+    let contents = std::fs::read_to_string(ctx_yaml_path)
+        .map_err(|e| format!("reading {}: {e}", ctx_yaml_path.display()))?;
+    serde_yaml::from_str(&contents).map_err(|e| format!("parsing {}: {e}", ctx_yaml_path.display()))
+}
+
+/// Parses `ctx/config.yaml` and maps each derived tag name (same naming as
+/// `derive_tags`) to its configured `apps:` list, mirroring xmonad's
+/// `TopicItem`/`wstApps` app-spawn config
+/// (~/config/wm/xmonad/Workspaces.hs). Tags whose slot has no `apps:` key
+/// map to an empty `Vec`, not an absent map entry — every non-disabled
+/// workspace's 3 slots always get an entry, matching `derive_tags`'
+/// unconditional 3-tags-per-workspace emission.
+pub fn tag_apps(ctx_yaml_path: &Path) -> Result<HashMap<String, Vec<String>>, String> {
+    let file = load_ctx_file(ctx_yaml_path)?;
+
+    let mut apps_by_tag = HashMap::new();
+    for ws in &file.workspaces {
+        if ws.wm_mode == WsMode::Disabled {
+            continue;
+        }
+        for i in 1u8..=3 {
+            let slot = ws.wm_workspaces.get(&i);
+            let slot_name = slot
+                .and_then(|s| s.name.clone())
+                .unwrap_or_else(|| DEFAULT_SLOT_NAMES[(i - 1) as usize].to_string());
+            let tag = format!("{}-{}", ws.name, slot_name);
+            let apps = slot.map(|s| s.apps.clone()).unwrap_or_default();
+            apps_by_tag.insert(tag, apps);
+        }
+    }
+    Ok(apps_by_tag)
 }
 
 #[cfg(test)]
@@ -250,6 +283,66 @@ workspaces:
     #[test]
     fn missing_file_is_an_error() {
         assert!(derive_tags(std::path::Path::new("/nonexistent/ctx-config.yaml")).is_err());
+    }
+
+    #[test]
+    fn tag_apps_returns_configured_apps_per_tag() {
+        let file = write_fixture(
+            r#"
+workspaces:
+  - name: "docker"
+    working_directory: "~/"
+    wm_mode: "show"
+    wm_workspaces:
+      1:
+        name: "docker"
+        apps:
+          - "wezterm -e tmuxinator docker"
+      2:
+        apps:
+          - "qutebrowser"
+"#,
+        );
+        let apps = tag_apps(file.path()).unwrap();
+        assert_eq!(
+            apps.get("docker-docker"),
+            Some(&vec!["wezterm -e tmuxinator docker".to_string()])
+        );
+        assert_eq!(apps.get("docker-llm"), Some(&vec!["qutebrowser".to_string()]));
+    }
+
+    #[test]
+    fn tag_apps_defaults_to_empty_list_when_slot_has_no_apps() {
+        let file = write_fixture(
+            r#"
+workspaces:
+  - name: "foo"
+    working_directory: "~/"
+    wm_mode: "show"
+"#,
+        );
+        let apps = tag_apps(file.path()).unwrap();
+        assert_eq!(apps.get("foo-web"), Some(&Vec::<String>::new()));
+        assert_eq!(apps.get("foo-llm"), Some(&Vec::<String>::new()));
+        assert_eq!(apps.get("foo-emacs"), Some(&Vec::<String>::new()));
+    }
+
+    #[test]
+    fn tag_apps_excludes_disabled_workspaces() {
+        let file = write_fixture(
+            r#"
+workspaces:
+  - name: "scratchpad"
+    working_directory: "~/"
+"#,
+        );
+        let apps = tag_apps(file.path()).unwrap();
+        assert!(apps.is_empty());
+    }
+
+    #[test]
+    fn tag_apps_missing_file_is_an_error() {
+        assert!(tag_apps(std::path::Path::new("/nonexistent/ctx-config.yaml")).is_err());
     }
 
     #[test]
