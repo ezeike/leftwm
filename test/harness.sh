@@ -198,7 +198,7 @@ case "$cmd" in
 
     windows)
         load_state
-        DISPLAY=":$REAL_DNUM" wmctrl -l
+        DISPLAY=":$REAL_DNUM" wmctrl -l "$@"
         ;;
 
     mark)
