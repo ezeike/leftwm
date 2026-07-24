@@ -337,7 +337,8 @@ fn load_from_file() -> Result<Config> {
     } else {
         tracing::debug!("Config file `config.ron` not found. Using default config.");
 
-        let config = Config::default();
+        let mut config = Config::default();
+        apply_ctx_tags(&mut config);
         let ron_pretty_conf = PrettyConfig::new()
             .depth_limit(2)
             .extensions(Extensions::IMPLICIT_SOME | Extensions::UNWRAP_NEWTYPES);
